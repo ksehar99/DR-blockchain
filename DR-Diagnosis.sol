@@ -44,6 +44,10 @@ contract DRDiagnosisResuls {
     /// @dev Maps doctor address to list of their assigned patient IDs
     mapping(address => uint[]) doctorToPatientId;
 
+    mapping(uint => bool) PatientExists;
+
+    mapping(uint => mapping(bytes32 => bool)) diagnosisHashExists;
+
     // ─── Errors ──────────────────────────────────────────────────────────────
 
     /// @notice Thrown when a non-owner calls an owner-only function
@@ -55,6 +59,8 @@ contract DRDiagnosisResuls {
     /// @notice Thrown when attempting to register a patient ID that already exists
     error PatientAlreadyExist();
 
+    error PatientNotFound();
+
     // ─── Events ──────────────────────────────────────────────────────────────
 
     /// @notice Emitted when a new patient is registered
@@ -62,6 +68,8 @@ contract DRDiagnosisResuls {
 
     /// @notice Emitted when a diagnosis is uploaded for a patient
     event DiagnosisUploaded(uint patientId, uint diagnosisResult, uint timestamp);
+
+    event DoctorReassigned(uint patientId, address oldDoctor, address newDoctor);
 
     // ─── Modifiers ───────────────────────────────────────────────────────────
 
@@ -86,9 +94,10 @@ contract DRDiagnosisResuls {
      * @param _patientId Unique identifier for the patient
      * @param _doctorAddress Wallet address of the assigned doctor
      */
-    function registerPatient(uint256 _patientId, address _doctorAddress) public onlyOwner {
-        if (patientIdToPatient[_patientId].timestamp != 0) revert PatientAlreadyExist();
+    function registerPatient(uint256 _patientId, address _doctorAddress) external onlyOwner {
+        if (PatientExists[_patientId]) revert PatientAlreadyExist();
 
+        PatientExists[_patientId] = true;
         patientIdToPatient[_patientId] = Patient(_patientId, _doctorAddress, block.timestamp);
         doctorToPatientId[_doctorAddress].push(_patientId);
         emit PatientRegistered(_patientId, _doctorAddress);
@@ -107,9 +116,36 @@ contract DRDiagnosisResuls {
         patientToDiagnosis[patientId].push(
             Diagnosis(imageHash, diagnosisResult, patientId, msg.sender, block.timestamp)
         );
+        diagnosisHashExists[patientId][imageHash] = true;
         emit DiagnosisUploaded(patientId, diagnosisResult, block.timestamp);
     }
 
+    /**
+    * @notice Reassigns a patient to a new doctor
+    * @dev Only callable by the owner. Patient must exist.
+    * @param _patientId Patient's unique ID
+    * @param _newDoctor New doctor's wallet address
+    */
+    function reassignDoctor(uint256 _patientId, address _newDoctor) external onlyOwner {
+        if (!PatientExists[_patientId]) revert PatientNotFound();
+        
+        address oldDoctor = patientIdToPatient[_patientId].doctorId;
+        patientIdToPatient[_patientId].doctorId = _newDoctor;
+        doctorToPatientId[_newDoctor].push(_patientId);
+        
+        emit DoctorReassigned(_patientId, oldDoctor, _newDoctor);
+    }
+
+    /**
+    * @notice Verifies if a given image hash exists in a patient's diagnosis records
+    * @dev On-chain tamper detection — no Python dependency required
+    * @param patientId Patient's unique ID
+    * @param imageHash SHA-256 hash of the retinal image to verify
+    * @return bool True if hash found, False if tampered or not found
+    */
+    function verifyDiagnosis(uint patientId, bytes32 imageHash) external view returns (bool) {
+        return diagnosisHashExists[patientId][imageHash];
+    }
     /**
      * @notice Returns list of patient IDs assigned to the calling doctor
      * @return Array of patient IDs
